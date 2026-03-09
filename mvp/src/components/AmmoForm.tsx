@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { ammoCatalog } from '../domain/catalog';
 import type { AmmoGroupDef, AmmoRow } from '../domain/types';
 
 interface AmmoFormProps {
@@ -9,6 +8,7 @@ interface AmmoFormProps {
 
 export function AmmoForm({ sectionId }: AmmoFormProps) {
   const session = useAppStore((s) => s.session);
+  const catalog = useAppStore((s) => s.catalog);
 
   if (!session) return null;
 
@@ -17,7 +17,7 @@ export function AmmoForm({ sectionId }: AmmoFormProps) {
 
   return (
     <div className="ammo-form">
-      {ammoCatalog.map((group) => (
+      {catalog.map((group) => (
         <AmmoGroupSection
           key={group.type}
           group={group}

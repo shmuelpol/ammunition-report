@@ -1,41 +1,62 @@
 import { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { ammoCatalog } from '../domain/catalog';
 import { buildNormalizedReport } from '../domain/reportModel';
 import { exportToExcel } from '../export/excelExport';
 import { useGoogleDrive } from '../hooks/useGoogleDrive';
 
 export function Summary() {
-  const { session, setView } = useAppStore();
-  const { isSignedIn, user, isLoading, signIn, saveReport, isConfigured } = useGoogleDrive();
+  const { session, catalog, setView } = useAppStore();
+  const drive = useGoogleDrive();
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState('');
 
   if (!session) return null;
 
-  const report = buildNormalizedReport(session);
+  const report = buildNormalizedReport(session, catalog);
+
+  /** Build a human-readable CSV from the report */
+  const buildReportCSV = (): string => {
+    const rows: string[] = [];
+    rows.push(['קטגוריה', 'דגם', ...report.sectionLabels, 'סה"כ'].join(','));
+
+    for (const group of catalog) {
+      const groupData = report.groupTotals[group.type];
+      if (!groupData) continue;
+      for (const model of groupData.models) {
+        rows.push([group.displayName, model.modelName, ...model.perSection, model.total].join(','));
+      }
+      rows.push([`סה"כ ${group.displayName}`, '', ...groupData.sectionTotals, groupData.grandTotal].join(','));
+      rows.push('');
+    }
+
+    const perSection = report.sectionLabels.map((_, i) =>
+      catalog.reduce((sum, g) => sum + (report.groupTotals[g.type]?.sectionTotals[i] || 0), 0),
+    );
+    rows.push(['סה"כ כללי', '', ...perSection, report.grandTotal].join(','));
+    return rows.join('\n');
+  };
 
   const handleSaveToDrive = async () => {
     setSaveStatus('saving');
     setSaveMessage('שומר...');
 
-    const fileName = `דוח_תחמושת_${session.unitName}_${session.reportDateTime.replace(/[:.]/g, '-')}.json`;
-    const result = await saveReport(session, fileName);
+    // Save JSON data
+    const jsonOk = await drive.saveData(session.unitName, session);
+    // Save CSV report
+    const csvOk = await drive.saveCsv(session.unitName, buildReportCSV());
 
-    if (result.success) {
+    if (jsonOk && csvOk) {
       setSaveStatus('success');
-      setSaveMessage(`✓ נשמר לתיקייה ב-Google Drive`);
-      setTimeout(() => setSaveStatus('idle'), 3000);
+      setSaveMessage('✓ נשמר ל-Drive (נתונים + CSV)');
     } else {
       setSaveStatus('error');
-      setSaveMessage(`שגיאה: ${result.error}`);
-      setTimeout(() => setSaveStatus('idle'), 3000);
+      setSaveMessage('שגיאה בשמירה ל-Drive');
     }
+    setTimeout(() => setSaveStatus('idle'), 3000);
   };
 
   return (
     <div className="summary-container">
-      {/* Header */}
       <div className="summary-header">
         <button className="back-btn" onClick={() => setView('entry')}>
           ← חזור להזנה
@@ -43,7 +64,6 @@ export function Summary() {
         <h2>סיכום דוח</h2>
       </div>
 
-      {/* Report metadata */}
       <div className="report-info">
         <span>גדוד: {session.battalionNumber}</span>
         <span>יחידה: {session.unitName}</span>
@@ -51,14 +71,12 @@ export function Summary() {
         <span>תאריך: {new Date(session.reportDateTime).toLocaleString('he-IL')}</span>
       </div>
 
-      {/* Grand total card */}
       <div className="grand-total-card">
         <h3>סה"כ כללי</h3>
         <div className="big-number">{report.grandTotal.toLocaleString()}</div>
       </div>
 
-      {/* Per-group tables */}
-      {ammoCatalog.map((group) => {
+      {catalog.map((group) => {
         const groupData = report.groupTotals[group.type];
         if (!groupData) return null;
 
@@ -86,17 +104,11 @@ export function Summary() {
                   </tr>
                 ))}
                 <tr className="subtotal-row">
-                  <td>
-                    <strong>סה"כ {group.displayName}</strong>
-                  </td>
+                  <td><strong>סה"כ {group.displayName}</strong></td>
                   {groupData.sectionTotals.map((total, i) => (
-                    <td key={i}>
-                      <strong>{total}</strong>
-                    </td>
+                    <td key={i}><strong>{total}</strong></td>
                   ))}
-                  <td className="total-cell">
-                    <strong>{groupData.grandTotal}</strong>
-                  </td>
+                  <td className="total-cell"><strong>{groupData.grandTotal}</strong></td>
                 </tr>
               </tbody>
             </table>
@@ -104,9 +116,8 @@ export function Summary() {
         );
       })}
 
-      {/* Export buttons */}
       <div className="export-actions">
-        <button className="export-btn excel-btn" onClick={() => exportToExcel(session, report)}>
+        <button className="export-btn excel-btn" onClick={() => exportToExcel(session, report, catalog)}>
           📥 יצוא ל-Excel
         </button>
         <button className="export-btn pdf-btn" onClick={() => window.print()}>
@@ -114,39 +125,16 @@ export function Summary() {
         </button>
       </div>
 
-      {/* Google Drive section */}
       <div className="drive-section">
-        <h3>Google Drive</h3>
-        {!isConfigured ? (
-          <p className="drive-not-configured">
-            ⚠️ שילוב Google Drive לא מוגדר. יש להגדיר <code>VITE_GOOGLE_CLIENT_ID</code> בקובץ <code>.env.local</code>.
-            <br />
-            <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">
-              פתח Google Cloud Console →
-            </a>
-          </p>
-        ) : isLoading ? (
-          <p>טוען Google Drive...</p>
-        ) : isSignedIn ? (
-          <div>
-            <p>✓ מחובר כ: <strong>{user?.email}</strong></p>
-            <button
-              className="drive-btn"
-              onClick={handleSaveToDrive}
-              disabled={saveStatus === 'saving'}
-            >
-              {saveStatus === 'saving' ? '⏳ שומר...' : '💾 שמור ל-Google Drive'}
-            </button>
-            {saveMessage && <p className={`save-status save-status-${saveStatus}`}>{saveMessage}</p>}
-          </div>
-        ) : (
-          <div>
-            <p>חבר לחשבון Google לשמור דיווחים ישירות לתיקייה שלך:</p>
-            <button className="drive-btn" onClick={signIn}>
-              🔓 התחבר ל-Google
-            </button>
-          </div>
-        )}
+        <h3>שמירה ל-Google Drive</h3>
+        <button
+          className="drive-btn"
+          onClick={handleSaveToDrive}
+          disabled={saveStatus === 'saving'}
+        >
+          {saveStatus === 'saving' ? '⏳ שומר...' : '💾 שמור נתונים + CSV ל-Drive'}
+        </button>
+        {saveMessage && <p className={`save-status save-status-${saveStatus}`}>{saveMessage}</p>}
       </div>
     </div>
   );

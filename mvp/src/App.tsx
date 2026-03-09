@@ -1,5 +1,8 @@
 import { useAppStore } from './store/useAppStore';
-import { SessionSetup } from './components/SessionSetup';
+import { DriveGate } from './components/DriveGate';
+import { ModeSelect } from './components/ModeSelect';
+import { CreateUnit } from './components/CreateUnit';
+import { SelectUnit } from './components/SelectUnit';
 import { SectionTabs } from './components/SectionTabs';
 import { Summary } from './components/Summary';
 import { UNIT_LEVEL_LABELS } from './domain/types';
@@ -9,9 +12,12 @@ export default function App() {
 
   return (
     <div className="app">
-      {view === 'setup' && <SessionSetup />}
+      {view === 'drive-gate' && <DriveGate />}
+      {view === 'mode-select' && <ModeSelect />}
+      {view === 'create-unit' && <CreateUnit />}
+      {view === 'select-unit' && <SelectUnit />}
 
-      {view !== 'setup' && session && (
+      {(view === 'entry' || view === 'summary') && session && (
         <div className="app-header">
           <div className="header-info">
             <span className="header-unit">{session.unitName}</span>
@@ -21,21 +27,10 @@ export default function App() {
           <div className="header-actions">
             <button
               className="header-btn"
-              onClick={() => setView('setup')}
-              title="חזור למסך הכניסה"
+              onClick={() => clearSession()}
+              title="חזור לתפריט ראשי"
             >
               🏠
-            </button>
-            <button
-              className="header-btn danger"
-              onClick={() => {
-                if (confirm('האם אתה בטוח שברצונך לנקות את הדוח ולהתחיל מחדש?')) {
-                  clearSession();
-                }
-              }}
-              title="נקה הכל"
-            >
-              🗑️
             </button>
           </div>
         </div>

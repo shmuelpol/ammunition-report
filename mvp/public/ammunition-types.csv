@@ -1,0 +1,28 @@
+group_type,display_name,model_id,model_name,requires_serial,quantity_only
+shell,פגז,shell-m107,נפיץ M107,false,false
+shell,פגז,shell-m107a3,נפיץ M107A3 / סרבי,false,false
+shell,פגז,shell-m795,נפיץ M795,false,false
+shell,פגז,shell-m485,תאורה M485,false,false
+shell,פגז,shell-m825,עשן M825,false,false
+shell,פגז,shell-dummy,דמוי נפיץ,false,false
+shell,פגז,shell-m150,עשן הפלטה M150,false,false
+shell,פגז,shell-m401,נפיץ ארוך טווח M401,false,false
+shell,פגז,shell-m999,M999,false,false
+charge,חנ"ה,charge-m7,M7,true,false
+charge,חנ"ה,charge-m85,M8.5,true,false
+charge,חנ"ה,charge-m9,M9,true,false
+charge,חנ"ה,charge-m10,M10,true,false
+charge,חנ"ה,charge-modular,מודולארי,true,false
+fuse,מרעום,fuse-m999,M999,false,false
+fuse,מרעום,fuse-582,582,false,false
+fuse,מרעום,fuse-739,739,false,false
+fuse,מרעום,fuse-137,137,false,false
+fuse,מרעום,fuse-762,762,false,false
+fuse,מרעום,fuse-147,147,false,false
+fuse,מרעום,fuse-rtz984,RTZ984,false,false
+fuse,מרעום,fuse-serbian,סרבי M02P1,false,false
+primer,תחלים,,,false,true
+bullet,קליעית,bullet-556,5.56,false,false
+bullet,קליעית,bullet-556-tracer,5.56 נותב,false,false
+bullet,קליעית,bullet-556-bullet,5.56 קלע,false,false
+bullet,קליעית,bullet-762,7.62,false,false

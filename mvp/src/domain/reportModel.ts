@@ -1,5 +1,4 @@
-import { ReportSession } from './types';
-import { ammoCatalog } from './catalog';
+import { ReportSession, AmmoGroupDef } from './types';
 
 // ===== Normalized report types =====
 
@@ -23,10 +22,9 @@ export interface ModelReport {
 }
 
 /**
- * Build a normalized report from session data.
- * Every catalog model appears even if not entered — quantity defaults to 0.
+ * Build a normalized report from session data and a dynamic catalog.
  */
-export function buildNormalizedReport(session: ReportSession): NormalizedReport {
+export function buildNormalizedReport(session: ReportSession, catalog: AmmoGroupDef[]): NormalizedReport {
   const sectionLabels = session.sections.map((s) => {
     if (s.parentGroup) return `${s.parentGroup} - ${s.label}`;
     return s.label;
@@ -35,7 +33,7 @@ export function buildNormalizedReport(session: ReportSession): NormalizedReport 
   const groupTotals: Record<string, GroupReport> = {};
   let grandTotal = 0;
 
-  for (const group of ammoCatalog) {
+  for (const group of catalog) {
     const groupReport: GroupReport = {
       models: [],
       sectionTotals: new Array(session.sections.length).fill(0),

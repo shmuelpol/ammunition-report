@@ -1,20 +1,19 @@
 // ===== Unit hierarchy =====
 export type UnitLevel = 'team' | 'platoon' | 'battery';
 export type SectionType = 'belly' | 'outside' | 'alpha' | 'ramsaw';
-export type AmmoGroupType = 'shell' | 'charge' | 'fuse' | 'primer' | 'bullet';
 
-// ===== Catalog definitions =====
+// ===== Catalog definitions (loaded dynamically from Drive template) =====
 export interface AmmoModelDef {
   id: string;
   name: string;
 }
 
 export interface AmmoGroupDef {
-  type: AmmoGroupType;
+  type: string;
   displayName: string;
   models: AmmoModelDef[];
   requiresSerial: boolean;
-  quantityOnly: boolean; // true = no model selection (e.g. primers)
+  quantityOnly: boolean;
 }
 
 // ===== Data entries =====
@@ -34,9 +33,22 @@ export interface Section {
   id: string;
   type: SectionType;
   label: string;
-  parentGroup?: string; // team name for belly/outside within a team
+  parentGroup?: string;
   entries: SectionEntries;
 }
+
+// ===== Unit config (stored as JSON in Drive) =====
+export interface UnitConfig {
+  unitName: string;
+  unitLevel: UnitLevel;
+  battalionNumber: string;
+  teamNames: string[];
+  createdAt: string;
+  createdBy: string;
+}
+
+// ===== App mode =====
+export type AppMode = 'new' | 'update';
 
 // ===== Session =====
 export interface ReportSession {
@@ -49,15 +61,6 @@ export interface ReportSession {
   sections: Section[];
   createdAt: string;
   updatedAt: string;
-}
-
-export interface SessionSetupData {
-  battalionNumber: string;
-  reportDateTime: string;
-  reporterName: string;
-  unitLevel: UnitLevel;
-  unitName: string;
-  teamNames: string[];
 }
 
 // ===== Draft info for listing =====

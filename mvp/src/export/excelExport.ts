@@ -1,14 +1,13 @@
 import * as XLSX from 'xlsx';
-import type { ReportSession } from '../domain/types';
+import type { ReportSession, AmmoGroupDef } from '../domain/types';
 import type { NormalizedReport } from '../domain/reportModel';
-import { ammoCatalog } from '../domain/catalog';
 
 /**
  * Export the report as an Excel file with two sheets:
  * 1. פירוט (Detail) — every model per section
  * 2. סיכום (Summary) — totals per group per section
  */
-export function exportToExcel(session: ReportSession, report: NormalizedReport) {
+export function exportToExcel(session: ReportSession, report: NormalizedReport, catalog: AmmoGroupDef[]) {
   const wb = XLSX.utils.book_new();
 
   // ===== Sheet 1: Detail =====
@@ -17,7 +16,7 @@ export function exportToExcel(session: ReportSession, report: NormalizedReport) 
   // Header row
   detailData.push(['קטגוריה', 'דגם', ...report.sectionLabels, 'סה"כ']);
 
-  for (const group of ammoCatalog) {
+  for (const group of catalog) {
     const groupData = report.groupTotals[group.type];
     if (!groupData) continue;
 
@@ -39,7 +38,7 @@ export function exportToExcel(session: ReportSession, report: NormalizedReport) 
 
   // Grand total
   const grandTotalsPerSection = report.sectionLabels.map((_, i) => {
-    return ammoCatalog.reduce((sum, g) => {
+    return catalog.reduce((sum, g) => {
       return sum + (report.groupTotals[g.type]?.sectionTotals[i] || 0);
     }, 0);
   });
@@ -63,7 +62,7 @@ export function exportToExcel(session: ReportSession, report: NormalizedReport) 
   const summaryData: (string | number)[][] = [];
   summaryData.push(['קטגוריה', ...report.sectionLabels, 'סה"כ']);
 
-  for (const group of ammoCatalog) {
+  for (const group of catalog) {
     const groupData = report.groupTotals[group.type];
     if (!groupData) continue;
     summaryData.push([group.displayName, ...groupData.sectionTotals, groupData.grandTotal]);

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { AmmoForm } from './AmmoForm';
+import { useGoogleDrive } from '../hooks/useGoogleDrive';
 import type { ReportSession, Section } from '../domain/types';
 
 // ===== Tab group logic =====
@@ -62,7 +63,8 @@ function getTabGroups(session: ReportSession): TabGroup[] {
 // ===== Component =====
 
 export function SectionTabs() {
-  const { session, saveDraft, setView } = useAppStore();
+  const { session, setView } = useAppStore();
+  const drive = useGoogleDrive();
   const [mainTab, setMainTab] = useState(0);
   const [subTab, setSubTab] = useState(0);
   const [saveMessage, setSaveMessage] = useState('');
@@ -80,8 +82,9 @@ export function SectionTabs() {
   }
 
   const handleSave = async () => {
-    await saveDraft();
-    setSaveMessage('✓ הטיוטה נשמרה');
+    if (!session) return;
+    const ok = await drive.saveData(session.unitName, session);
+    setSaveMessage(ok ? '✓ נשמר ל-Drive' : '✕ שגיאה בשמירה');
     setTimeout(() => setSaveMessage(''), 2000);
   };
 
@@ -132,7 +135,7 @@ export function SectionTabs() {
           className={`action-btn save-btn ${saveMessage ? 'saved' : ''}`}
           onClick={handleSave}
         >
-          {saveMessage || '💾 שמור טיוטה'}
+          {saveMessage || '💾 שמור ל-Drive'}
         </button>
         <button className="action-btn summary-btn" onClick={() => setView('summary')}>
           📊 סיכום ויצוא
