@@ -107,6 +107,17 @@ export async function signInGoogleDrive(): Promise<boolean> {
   try {
     const auth = window.gapi.auth2.getAuthInstance();
     await auth.signIn();
+
+    // Update status immediately after sign-in (don't wait for listener)
+    if (auth.isSignedIn.get()) {
+      const user = auth.currentUser.get();
+      authStatus.isSignedIn = true;
+      authStatus.user = {
+        email: user.getBasicProfile().getEmail(),
+        name: user.getBasicProfile().getName(),
+      };
+    }
+
     return authStatus.isSignedIn;
   } catch (err) {
     console.error('Sign in failed:', err);
