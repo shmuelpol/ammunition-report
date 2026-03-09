@@ -1,6 +1,6 @@
 /**
- * Google Drive integration service
- * Allows users to save ammunition reports directly to their Google Drive
+ * Google Drive integration service — using Google Identity Services (GIS)
+ * The legacy gapi.auth2 was retired by Google. This uses the modern token client.
  */
 
 declare global {
@@ -12,7 +12,7 @@ declare global {
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const FOLDER_NAME = 'אפליקציית ספירת מלאי תחמושת';
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
 /**
  * Check if Google Drive integration is configured
@@ -35,63 +35,31 @@ export interface SaveResult {
   error?: string;
 }
 
-let authStatus: GoogleAuthStatus = {
-  isSignedIn: false,
-  user: null,
-};
+let tokenClient: any = null;
+let accessToken: string | null = null;
+let gapiLoaded = false;
+let gisLoaded = false;
+
+// Callback that the hook will set to be notified when sign-in completes
+let onSignInCallback: ((status: GoogleAuthStatus) => void) | null = null;
+
+export function setOnSignInCallback(cb: ((status: GoogleAuthStatus) => void) | null) {
+  onSignInCallback = cb;
+}
 
 /**
- * Initialize Google API client
+ * Load the gapi client and the Drive discovery doc
  */
-export async function initGoogleDrive(): Promise<void> {
-  if (!CLIENT_ID) {
-    console.warn('Google Drive integration disabled: VITE_GOOGLE_CLIENT_ID not set');
-    return;
-  }
-
+function loadGapiClient(): Promise<void> {
   return new Promise((resolve) => {
     const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/platform.js';
-    script.async = true;
-    script.defer = true;
+    script.src = 'https://apis.google.com/js/api.js';
     script.onload = () => {
-      window.gapi.load('client:auth2', async () => {
-        try {
-          await window.gapi.client.init({
-            clientId: CLIENT_ID,
-            scope: SCOPES.join(' '),
-          });
-
-          const auth = window.gapi.auth2.getAuthInstance();
-          if (auth.isSignedIn.get()) {
-            const user = auth.currentUser.get();
-            authStatus.isSignedIn = true;
-            authStatus.user = {
-              email: user.getBasicProfile().getEmail(),
-              name: user.getBasicProfile().getName(),
-            };
-          }
-
-          auth.isSignedIn.listen(() => {
-            if (auth.isSignedIn.get()) {
-              const user = auth.currentUser.get();
-              authStatus.isSignedIn = true;
-              authStatus.user = {
-                email: user.getBasicProfile().getEmail(),
-                name: user.getBasicProfile().getName(),
-              };
-              console.log('✓ Signed in to Google Drive');
-            } else {
-              authStatus.isSignedIn = false;
-              authStatus.user = null;
-            }
-          });
-
-          resolve();
-        } catch (err) {
-          console.warn('Failed to init Google Drive:', err);
-          resolve();
-        }
+      window.gapi.load('client', async () => {
+        await window.gapi.client.init({});
+        await window.gapi.client.load('https://www.googleapis.com/discovery/v1/apis/drive/v3/rest');
+        gapiLoaded = true;
+        resolve();
       });
     };
     document.head.appendChild(script);
@@ -99,95 +67,135 @@ export async function initGoogleDrive(): Promise<void> {
 }
 
 /**
- * Sign in to Google Drive
+ * Load the GIS token client
  */
-export async function signInGoogleDrive(): Promise<boolean> {
-  if (!window.gapi) return false;
+function loadGisClient(): Promise<void> {
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.onload = () => {
+      tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: async (tokenResponse: any) => {
+          if (tokenResponse.error) {
+            console.error('Token error:', tokenResponse.error);
+            return;
+          }
+          accessToken = tokenResponse.access_token;
 
-  try {
-    const auth = window.gapi.auth2.getAuthInstance();
-    await auth.signIn();
+          // Fetch user info
+          try {
+            const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            const info = await res.json();
+            const status: GoogleAuthStatus = {
+              isSignedIn: true,
+              user: { email: info.email, name: info.name || info.email },
+            };
+            if (onSignInCallback) onSignInCallback(status);
+          } catch {
+            const status: GoogleAuthStatus = {
+              isSignedIn: true,
+              user: { email: 'unknown', name: 'unknown' },
+            };
+            if (onSignInCallback) onSignInCallback(status);
+          }
+        },
+      });
+      gisLoaded = true;
+      resolve();
+    };
+    document.head.appendChild(script);
+  });
+}
 
-    // Update status immediately after sign-in (don't wait for listener)
-    if (auth.isSignedIn.get()) {
-      const user = auth.currentUser.get();
-      authStatus.isSignedIn = true;
-      authStatus.user = {
-        email: user.getBasicProfile().getEmail(),
-        name: user.getBasicProfile().getName(),
-      };
-    }
+/**
+ * Initialize both libraries
+ */
+export async function initGoogleDrive(): Promise<void> {
+  if (!CLIENT_ID) return;
+  await Promise.all([loadGapiClient(), loadGisClient()]);
+}
 
-    return authStatus.isSignedIn;
-  } catch (err) {
-    console.error('Sign in failed:', err);
-    return false;
+/**
+ * Request an access token (opens Google sign-in popup)
+ */
+export function signInGoogleDrive(): void {
+  if (!tokenClient) {
+    console.error('Google Identity Services not loaded');
+    return;
+  }
+  // If we already have a token, request silently; otherwise show consent
+  if (accessToken) {
+    tokenClient.requestAccessToken({ prompt: '' });
+  } else {
+    tokenClient.requestAccessToken({ prompt: 'consent' });
   }
 }
 
 /**
- * Sign out from Google Drive
+ * Sign out — revoke the token
  */
-export async function signOutGoogleDrive(): Promise<void> {
-  if (!window.gapi) return;
-
-  try {
-    const auth = window.gapi.auth2.getAuthInstance();
-    await auth.signOut();
-  } catch (err) {
-    console.error('Sign out failed:', err);
+export function signOutGoogleDrive(): void {
+  if (accessToken) {
+    window.google.accounts.oauth2.revoke(accessToken);
+    accessToken = null;
   }
-}
-
-/**
- * Get current auth status
- */
-export function getGoogleAuthStatus(): GoogleAuthStatus {
-  return { ...authStatus };
 }
 
 /**
  * Save a report to Google Drive as JSON
  */
 export async function saveReportToDrive(reportData: any, fileName: string): Promise<SaveResult> {
-  if (!authStatus.isSignedIn || !window.gapi) {
-    return {
-      success: false,
-      error: 'Not signed in to Google Drive',
-    };
+  if (!accessToken || !gapiLoaded) {
+    return { success: false, error: 'Not signed in to Google Drive' };
   }
 
   try {
-    // Ensure folder exists
     const folderId = await getOrCreateFolder(FOLDER_NAME);
+    const fileContent = JSON.stringify(reportData, null, 2);
 
-    const fileMetadata = {
+    // Use multipart upload for file + metadata
+    const boundary = '-------batch_boundary';
+    const metadata = {
       name: fileName,
       parents: [folderId],
       mimeType: 'application/json',
     };
 
-    const fileContent = JSON.stringify(reportData, null, 2);
+    const body =
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${fileContent}\r\n` +
+      `--${boundary}--`;
 
-    const response = await window.gapi.client.drive.files.create({
-      resource: fileMetadata,
-      media: {
-        mimeType: 'application/json',
-        body: fileContent,
+    const response = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body,
       },
-      fields: 'id, webViewLink, name, createdTime',
-    });
+    );
 
-    return {
-      success: true,
-      fileId: response.result.id,
-    };
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error?.message || `HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+    return { success: true, fileId: result.id };
   } catch (err: any) {
     console.error('Failed to save to Drive:', err);
-    return {
-      success: false,
-      error: err.message || 'Failed to save to Drive',
-    };
+    return { success: false, error: err.message || 'Failed to save' };
   }
 }
 
@@ -195,101 +203,31 @@ export async function saveReportToDrive(reportData: any, fileName: string): Prom
  * Get or create a folder in user's drive
  */
 async function getOrCreateFolder(folderName: string): Promise<string> {
-  try {
-    // Search for existing folder
-    const response = await window.gapi.client.drive.files.list({
-      q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id)',
-      pageSize: 1,
-    });
+  // Search for existing folder
+  const searchRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+      `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    )}&spaces=drive&fields=files(id)&pageSize=1`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const searchData = await searchRes.json();
 
-    if (response.result.files && response.result.files.length > 0) {
-      return response.result.files[0].id;
-    }
-
-    // Create new folder
-    const createResponse = await window.gapi.client.drive.files.create({
-      resource: {
-        name: folderName,
-        mimeType: 'application/vnd.google-apps.folder',
-      },
-      fields: 'id',
-    });
-
-    return createResponse.result.id;
-  } catch (err) {
-    console.error('Failed to manage folder:', err);
-    throw err;
-  }
-}
-
-/**
- * List recent reports from Google Drive
- */
-export async function listReportsFromDrive(): Promise<any[]> {
-  if (!authStatus.isSignedIn || !window.gapi) {
-    return [];
+  if (searchData.files && searchData.files.length > 0) {
+    return searchData.files[0].id;
   }
 
-  try {
-    const folderId = await getOrCreateFolder(FOLDER_NAME);
-
-    const response = await window.gapi.client.drive.files.list({
-      q: `parents='${folderId}' and mimeType='application/json' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name, createdTime, modifiedTime, webViewLink)',
-      orderBy: 'modifiedTime desc',
-      pageSize: 20,
-    });
-
-    return response.result.files || [];
-  } catch (err) {
-    console.error('Failed to list Drive files:', err);
-    return [];
-  }
-}
-
-/**
- * Export a report to Google Drive as Excel (via Sheets)
- */
-export async function exportReportToSheetsOnDrive(
-  reportData: any,
-  fileName: string,
-): Promise<SaveResult> {
-  if (!authStatus.isSignedIn || !window.gapi) {
-    return {
-      success: false,
-      error: 'Not signed in to Google Drive',
-    };
-  }
-
-  try {
-    const folderId = await getOrCreateFolder(FOLDER_NAME);
-
-    // Create a Google Sheet
-    const fileMetadata = {
-      name: fileName,
-      parents: [folderId],
-      mimeType: 'application/vnd.google-apps.spreadsheet',
-    };
-
-    const response = await window.gapi.client.drive.files.create({
-      resource: fileMetadata,
-      fields: 'id, webViewLink, name',
-    });
-
-    // TODO: Populate the sheet with report data using Google Sheets API
-
-    return {
-      success: true,
-      fileId: response.result.id,
-    };
-  } catch (err: any) {
-    console.error('Failed to export to Sheets:', err);
-    return {
-      success: false,
-      error: err.message || 'Failed to export',
-    };
-  }
+  // Create new folder
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+    }),
+  });
+  const createData = await createRes.json();
+  return createData.id;
 }

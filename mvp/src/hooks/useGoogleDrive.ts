@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { initGoogleDrive, getGoogleAuthStatus, signInGoogleDrive, signOutGoogleDrive, saveReportToDrive, isGoogleDriveConfigured } from '../integrations/googleDrive';
+import { useEffect, useState, useCallback } from 'react';
+import { initGoogleDrive, signInGoogleDrive, signOutGoogleDrive, saveReportToDrive, isGoogleDriveConfigured, setOnSignInCallback } from '../integrations/googleDrive';
 import type { GoogleAuthStatus } from '../integrations/googleDrive';
 
 /**
- * Hook for Google Drive integration
+ * Hook for Google Drive integration (using modern GIS token client)
  */
 export function useGoogleDrive() {
   const [authStatus, setAuthStatus] = useState<GoogleAuthStatus>({
@@ -19,33 +19,35 @@ export function useGoogleDrive() {
       return;
     }
 
+    // Register callback so the integration can notify us when sign-in completes
+    setOnSignInCallback((status) => {
+      setAuthStatus(status);
+      setIsLoading(false);
+    });
+
     const initAsync = async () => {
       await initGoogleDrive();
-      setAuthStatus(getGoogleAuthStatus());
       setIsLoading(false);
     };
 
     initAsync();
+
+    return () => setOnSignInCallback(null);
   }, [isConfigured]);
 
-  const signIn = async () => {
-    setIsLoading(true);
-    const result = await signInGoogleDrive();
-    setAuthStatus(getGoogleAuthStatus());
-    setIsLoading(false);
-    return result;
-  };
+  const signIn = useCallback(() => {
+    signInGoogleDrive();
+    // The callback registered above will update state when the popup completes
+  }, []);
 
-  const signOut = async () => {
-    setIsLoading(true);
-    await signOutGoogleDrive();
-    setAuthStatus(getGoogleAuthStatus());
-    setIsLoading(false);
-  };
+  const signOut = useCallback(() => {
+    signOutGoogleDrive();
+    setAuthStatus({ isSignedIn: false, user: null });
+  }, []);
 
-  const saveReport = async (data: any, fileName: string) => {
+  const saveReport = useCallback(async (data: any, fileName: string) => {
     return saveReportToDrive(data, fileName);
-  };
+  }, []);
 
   return {
     isSignedIn: authStatus.isSignedIn,
