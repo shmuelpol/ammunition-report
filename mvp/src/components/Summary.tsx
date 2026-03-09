@@ -7,7 +7,7 @@ import { useGoogleDrive } from '../hooks/useGoogleDrive';
 
 export function Summary() {
   const { session, setView } = useAppStore();
-  const { isSignedIn, user, isLoading, signIn, saveReport } = useGoogleDrive();
+  const { isSignedIn, user, isLoading, signIn, saveReport, isConfigured } = useGoogleDrive();
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState('');
 
@@ -95,11 +95,37 @@ export function Summary() {
                     </td>
                   ))}
                   <td className="total-cell">
+                    <strong>{groupData.grandTotal}</strong>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+
+      {/* Export buttons */}
+      <div className="export-actions">
+        <button className="export-btn excel-btn" onClick={() => exportToExcel(session, report)}>
+          📥 יצוא ל-Excel
+        </button>
+        <button className="export-btn pdf-btn" onClick={() => window.print()}>
+          🖨️ הדפסה / PDF
+        </button>
+      </div>
 
       {/* Google Drive section */}
       <div className="drive-section">
         <h3>Google Drive</h3>
-        {isLoading ? (
+        {!isConfigured ? (
+          <p className="drive-not-configured">
+            ⚠️ שילוב Google Drive לא מוגדר. יש להגדיר <code>VITE_GOOGLE_CLIENT_ID</code> בקובץ <code>.env.local</code>.
+            <br />
+            <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">
+              פתח Google Cloud Console →
+            </a>
+          </p>
+        ) : isLoading ? (
           <p>טוען Google Drive...</p>
         ) : isSignedIn ? (
           <div>
@@ -121,24 +147,6 @@ export function Summary() {
             </button>
           </div>
         )}
-      </div>
-                    <strong>{groupData.grandTotal}</strong>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
-
-      {/* Export buttons */}
-      <div className="export-actions">
-        <button className="export-btn excel-btn" onClick={() => exportToExcel(session, report)}>
-          📥 יצוא ל-Excel
-        </button>
-        <button className="export-btn pdf-btn" onClick={() => window.print()}>
-          🖨️ הדפסה / PDF
-        </button>
       </div>
     </div>
   );

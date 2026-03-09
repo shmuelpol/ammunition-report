@@ -14,6 +14,13 @@ const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const FOLDER_NAME = 'אפליקציית ספירת מלאי תחמושת';
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
+/**
+ * Check if Google Drive integration is configured
+ */
+export function isGoogleDriveConfigured(): boolean {
+  return CLIENT_ID.length > 0;
+}
+
 export interface GoogleAuthStatus {
   isSignedIn: boolean;
   user: {

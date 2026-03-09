@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { initGoogleDrive, getGoogleAuthStatus, signInGoogleDrive, signOutGoogleDrive, saveReportToDrive } from '../integrations/googleDrive';
+import { initGoogleDrive, getGoogleAuthStatus, signInGoogleDrive, signOutGoogleDrive, saveReportToDrive, isGoogleDriveConfigured } from '../integrations/googleDrive';
 import type { GoogleAuthStatus } from '../integrations/googleDrive';
 
 /**
@@ -11,8 +11,14 @@ export function useGoogleDrive() {
     user: null,
   });
   const [isLoading, setIsLoading] = useState(true);
+  const isConfigured = isGoogleDriveConfigured();
 
   useEffect(() => {
+    if (!isConfigured) {
+      setIsLoading(false);
+      return;
+    }
+
     const initAsync = async () => {
       await initGoogleDrive();
       setAuthStatus(getGoogleAuthStatus());
@@ -20,7 +26,7 @@ export function useGoogleDrive() {
     };
 
     initAsync();
-  }, []);
+  }, [isConfigured]);
 
   const signIn = async () => {
     setIsLoading(true);
@@ -45,6 +51,7 @@ export function useGoogleDrive() {
     isSignedIn: authStatus.isSignedIn,
     user: authStatus.user,
     isLoading,
+    isConfigured,
     signIn,
     signOut,
     saveReport,
