@@ -1,0 +1,14 @@
+# Node
+node_modules/
+
+# Vite build output
+mvp/dist/
+
+# Vite cache
+mvp/.vite/
+
+# Env
+.env.local
+
+# Logs
+*.log
