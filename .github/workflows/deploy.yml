@@ -39,6 +39,8 @@ jobs:
       - name: Build application
         working-directory: mvp
         run: npm run build
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
 
       - name: Create .nojekyll
         run: touch mvp/dist/.nojekyll
