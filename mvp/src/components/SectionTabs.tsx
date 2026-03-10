@@ -2,142 +2,143 @@ import { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { AmmoForm } from './AmmoForm';
 import { useGoogleDrive } from '../hooks/useGoogleDrive';
-import type { ReportSession, Section } from '../domain/types';
-
-// ===== Tab group logic =====
-
-interface TabGroup {
-  id: string;
-  label: string;
-  type: 'team' | 'standalone';
-  sections: string[]; // section IDs (for teams: [bellyId, outsideId])
-}
-
-function getTabGroups(session: ReportSession): TabGroup[] {
-  // Team level: simple flat tabs
-  if (session.unitLevel === 'team') {
-    return session.sections.map((s) => ({
-      id: s.id,
-      label: s.label,
-      type: 'standalone' as const,
-      sections: [s.id],
-    }));
-  }
-
-  // Platoon / Battery: group by parent team
-  const groups: TabGroup[] = [];
-  const teamMap = new Map<string, string[]>();
-  const standalone: Section[] = [];
-
-  for (const section of session.sections) {
-    if (section.parentGroup) {
-      const arr = teamMap.get(section.parentGroup) || [];
-      arr.push(section.id);
-      teamMap.set(section.parentGroup, arr);
-    } else {
-      standalone.push(section);
-    }
-  }
-
-  for (const [teamName, sectionIds] of teamMap) {
-    groups.push({
-      id: `team-${teamName}`,
-      label: teamName,
-      type: 'team',
-      sections: sectionIds,
-    });
-  }
-
-  for (const section of standalone) {
-    groups.push({
-      id: section.id,
-      label: section.label,
-      type: 'standalone',
-      sections: [section.id],
-    });
-  }
-
-  return groups;
-}
-
-// ===== Component =====
+import {
+  buildNewFormatWorkbook,
+  workbookToBuffer,
+} from '../domain/excelFormat';
+import { getUserEmail } from '../integrations/googleDrive';
 
 export function SectionTabs() {
-  const { session, setView } = useAppStore();
+  const { session, catalog, setView, incrementRevision } = useAppStore();
   const drive = useGoogleDrive();
   const [mainTab, setMainTab] = useState(0);
   const [subTab, setSubTab] = useState(0);
   const [saveMessage, setSaveMessage] = useState('');
+  const [saving, setSaving] = useState(false);
 
   if (!session) return null;
 
-  const tabGroups = getTabGroups(session);
-  const currentGroup = tabGroups[mainTab] || tabGroups[0];
-
-  let currentSectionId: string;
-  if (currentGroup.type === 'team') {
-    currentSectionId = currentGroup.sections[subTab] || currentGroup.sections[0];
-  } else {
-    currentSectionId = currentGroup.sections[0];
-  }
+  const sections = session.sections;
+  const currentSection = sections[mainTab] || sections[0];
+  const allColumns = [...currentSection.gunIds, ...currentSection.storageLocations];
+  const currentColumn = allColumns[subTab] || allColumns[0];
 
   const handleSave = async () => {
-    if (!session) return;
-    const ok = await drive.saveData(session.unitName, session);
-    setSaveMessage(ok ? '✓ נשמר ל-Drive' : '✕ שגיאה בשמירה');
-    setTimeout(() => setSaveMessage(''), 2000);
+    if (!session || saving) return;
+    setSaving(true);
+    setSaveMessage('');
+
+    try {
+      const metadata = {
+        appVersion: '1.0',
+        formatVersion: 2,
+        unitNumber: session.battalionNumber,
+        unitName: session.unitName,
+        unitLevel: session.unitLevel,
+        subUnits: session.sections.map((s) => s.label),
+        createdAt: session.createdAt,
+        lastModifiedAt: new Date().toISOString(),
+        lastModifiedBy: getUserEmail(),
+        dataRevision: session.dataRevision + 1,
+      };
+
+      const wb = buildNewFormatWorkbook(
+        {
+          unitName: session.unitName,
+          unitLevel: session.unitLevel,
+          battalionNumber: session.battalionNumber,
+          subUnits: session.sections.map((s) => ({
+            displayName: s.label,
+            codeName: '',
+            gunIds: s.gunIds,
+            storageLocations: s.storageLocations,
+          })),
+          createdAt: session.createdAt,
+          createdBy: session.reporterName,
+        },
+        session.sections,
+        catalog,
+        metadata,
+      );
+
+      const buffer = workbookToBuffer(wb);
+      const result = await drive.saveUnitExcel(
+        session.unitName,
+        buffer,
+        session.dataRevision,
+      );
+
+      if (result.success) {
+        incrementRevision();
+        setSaveMessage('✓ נשמר ל-Drive');
+      } else {
+        setSaveMessage(`✕ ${result.error || 'שגיאה בשמירה'}`);
+      }
+    } catch (err: any) {
+      setSaveMessage(`✕ ${err.message || 'שגיאה'}`);
+    }
+    setSaving(false);
+    setTimeout(() => setSaveMessage(''), 3000);
   };
 
   return (
     <div className="section-tabs">
-      {/* Main tab bar */}
-      <div className="main-tab-bar">
-        {tabGroups.map((group, i) => (
-          <button
-            key={group.id}
-            className={`main-tab ${i === mainTab ? 'active' : ''}`}
-            onClick={() => {
-              setMainTab(i);
-              setSubTab(0);
-            }}
-          >
-            {group.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Sub tab bar for team groups (belly / outside) */}
-      {currentGroup.type === 'team' && (
-        <div className="sub-tab-bar">
-          <button
-            className={`sub-tab ${subTab === 0 ? 'active' : ''}`}
-            onClick={() => setSubTab(0)}
-          >
-            בטן
-          </button>
-          <button
-            className={`sub-tab ${subTab === 1 ? 'active' : ''}`}
-            onClick={() => setSubTab(1)}
-          >
-            חוץ
-          </button>
+      {/* Main tabs — sub-units */}
+      {sections.length > 1 && (
+        <div className="main-tab-bar">
+          {sections.map((section, i) => (
+            <button
+              key={section.id}
+              className={`main-tab ${i === mainTab ? 'active' : ''}`}
+              onClick={() => {
+                setMainTab(i);
+                setSubTab(0);
+              }}
+            >
+              {section.label}
+            </button>
+          ))}
         </div>
       )}
 
-      {/* Ammo entry form */}
+      {/* Sub tabs — locations (guns + storage) */}
+      {allColumns.length > 0 && (
+        <div className="sub-tab-bar" style={{ overflowX: 'auto' }}>
+          {allColumns.map((col, i) => (
+            <button
+              key={col}
+              className={`sub-tab ${i === subTab ? 'active' : ''}`}
+              onClick={() => setSubTab(i)}
+              style={{ minWidth: 'auto', padding: '10px 14px', whiteSpace: 'nowrap' }}
+            >
+              {col}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Ammo form for current section + column */}
       <div className="form-container">
-        <AmmoForm key={currentSectionId} sectionId={currentSectionId} />
+        <AmmoForm
+          key={`${currentSection.id}-${currentColumn}`}
+          sectionId={currentSection.id}
+          columnId={currentColumn}
+        />
       </div>
 
-      {/* Bottom action bar */}
+      {/* Bottom actions */}
       <div className="bottom-actions">
         <button
-          className={`action-btn save-btn ${saveMessage ? 'saved' : ''}`}
+          className={`action-btn save-btn ${saveMessage.startsWith('✓') ? 'saved' : ''}`}
           onClick={handleSave}
+          disabled={saving}
         >
-          {saveMessage || '💾 שמור ל-Drive'}
+          {saving ? '⏳ שומר...' : saveMessage || '💾 שמור ל-Drive'}
         </button>
-        <button className="action-btn summary-btn" onClick={() => setView('summary')}>
+        <button
+          className="action-btn summary-btn"
+          onClick={() => setView('summary')}
+        >
           📊 סיכום ויצוא
         </button>
       </div>

@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useGoogleDrive } from '../hooks/useGoogleDrive';
+import {
+  parseAppExcel,
+  parseOldFormatExcel,
+  bufferToWorkbook,
+} from '../domain/excelFormat';
 import type { DriveFile } from '../integrations/googleDrive';
-import type { ReportSession, UnitConfig } from '../domain/types';
 
-/**
- * Select an existing unit from Drive and load its data.
- */
 export function SelectUnit() {
-  const { catalog, loadExistingSession, setView, startNewUnit } = useAppStore();
+  const { catalog, loadExistingSession, setView } = useAppStore();
   const drive = useGoogleDrive();
   const [units, setUnits] = useState<DriveFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,52 +19,96 @@ export function SelectUnit() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      const files = await drive.listUnits();
-      setUnits(files);
+      const folders = await drive.listUnits();
+      setUnits(folders);
       setLoading(false);
     };
     load();
   }, []);
 
-  const handleLoadUnit = async (file: DriveFile) => {
-    const unitName = file.name.replace('-config.json', '');
-    setLoadingUnit(unitName);
-    setError('');
+  const loadFromBuffer = (
+    buffer: ArrayBuffer,
+    name: string,
+    isMigration: boolean,
+  ) => {
+    const wb = bufferToWorkbook(buffer);
+    const parsed = parseAppExcel(wb, catalog);
 
+    if (parsed) {
+      loadExistingSession({
+        id: Date.now().toString(36),
+        battalionNumber: parsed.metadata.unitNumber,
+        reportDateTime: new Date().toISOString(),
+        reporterName: parsed.metadata.lastModifiedBy,
+        unitLevel: parsed.metadata.unitLevel,
+        unitName: parsed.metadata.unitName,
+        sections: parsed.sections,
+        dataRevision: parsed.metadata.dataRevision,
+        createdAt: parsed.metadata.createdAt,
+        updatedAt: parsed.metadata.lastModifiedAt,
+      });
+      return true;
+    }
+
+    // Try old format
+    const sections = parseOldFormatExcel(wb, catalog);
+    if (sections.length > 0) {
+      loadExistingSession({
+        id: Date.now().toString(36),
+        battalionNumber: name,
+        reportDateTime: new Date().toISOString(),
+        reporterName: '',
+        unitLevel: 'battalion',
+        unitName: name,
+        sections,
+        dataRevision: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        migratedFromOldFormat: true,
+      });
+      return true;
+    }
+
+    return false;
+  };
+
+  const handleLoadUnit = async (folder: DriveFile) => {
+    setLoadingUnit(folder.name);
+    setError('');
     try {
-      // Load config
-      const config: UnitConfig | null = await drive.loadConfig(unitName);
-      if (!config) {
-        setError(`לא נמצא קובץ הגדרות עבור ${unitName}`);
+      const buffer = await drive.readUnitExcel(folder.id, folder.name);
+      if (!buffer) {
+        setError(`לא נמצא קובץ נתונים עבור ${folder.name}`);
         setLoadingUnit(null);
         return;
       }
-
-      // Try loading existing data
-      const data = await drive.loadData(unitName);
-
-      if (data && data.sections) {
-        // Load existing session data
-        const session: ReportSession = {
-          id: data.id || Date.now().toString(36),
-          battalionNumber: config.battalionNumber,
-          reportDateTime: data.reportDateTime || new Date().toISOString(),
-          reporterName: data.reporterName || config.createdBy,
-          unitLevel: config.unitLevel,
-          unitName: config.unitName,
-          sections: data.sections,
-          createdAt: data.createdAt || config.createdAt,
-          updatedAt: data.updatedAt || new Date().toISOString(),
-        };
-        loadExistingSession(session);
-      } else {
-        // No data yet — start fresh from config
-        startNewUnit(config, catalog);
+      if (!loadFromBuffer(buffer, folder.name, false)) {
+        setError('לא ניתן לנתח את קובץ ה-Excel');
       }
     } catch (err: any) {
       setError(err.message || 'שגיאה בטעינת נתונים');
-      setLoadingUnit(null);
     }
+    setLoadingUnit(null);
+  };
+
+  const handleImportFile = async () => {
+    const file = await drive.pickFile(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel',
+    );
+    if (!file) return;
+
+    setLoadingUnit(file.name);
+    setError('');
+    try {
+      const buffer = await drive.readFileById(file.id);
+      const name = file.name.replace(/\.xlsx?$/i, '');
+      if (!loadFromBuffer(buffer, name, true)) {
+        setError('לא ניתן לנתח את קובץ ה-Excel');
+      }
+    } catch (err: any) {
+      setError(err.message || 'שגיאה בייבוא');
+    }
+    setLoadingUnit(null);
   };
 
   return (
@@ -82,36 +127,53 @@ export function SelectUnit() {
           </div>
         ) : units.length === 0 ? (
           <div className="gate-status">
-            <p>לא נמצאו יחידות בתיקייה. צור יחידה חדשה תחילה.</p>
-            <button className="start-btn" onClick={() => {
-              useAppStore.getState().setMode('new');
-              setView('create-unit');
-            }}>
-              🆕 צור יחידה חדשה
-            </button>
+            <p>לא נמצאו יחידות בתיקייה.</p>
           </div>
         ) : (
           <div className="unit-list">
-            {units.map((file) => {
-              const unitName = file.name.replace('-config.json', '');
-              return (
-                <div key={file.id} className="unit-card" onClick={() => handleLoadUnit(file)}>
-                  <div className="unit-card-info">
-                    <strong>{unitName}</strong>
-                    {file.modifiedTime && (
-                      <span className="unit-card-date">
-                        עודכן: {new Date(file.modifiedTime).toLocaleString('he-IL')}
-                      </span>
-                    )}
-                  </div>
-                  <div className="unit-card-action">
-                    {loadingUnit === unitName ? '⏳' : '←'}
-                  </div>
+            {units.map((folder) => (
+              <div
+                key={folder.id}
+                className="unit-card"
+                onClick={() => handleLoadUnit(folder)}
+              >
+                <div className="unit-card-info">
+                  <strong>{folder.name}</strong>
+                  {folder.modifiedTime && (
+                    <span className="unit-card-date">
+                      עודכן:{' '}
+                      {new Date(folder.modifiedTime).toLocaleString('he-IL')}
+                    </span>
+                  )}
                 </div>
-              );
-            })}
+                <div className="unit-card-action">
+                  {loadingUnit === folder.name ? '⏳' : '←'}
+                </div>
+              </div>
+            ))}
           </div>
         )}
+
+        {drive.isPickerAvailable && (
+          <button
+            className="start-btn"
+            style={{ marginTop: 16, background: '#4285f4' }}
+            onClick={handleImportFile}
+          >
+            📥 ייבא קובץ Excel מ-Drive
+          </button>
+        )}
+
+        <button
+          className="start-btn"
+          style={{ marginTop: 8 }}
+          onClick={() => {
+            useAppStore.getState().setMode('new');
+            setView('create-unit');
+          }}
+        >
+          🆕 צור יחידה חדשה
+        </button>
 
         {error && <p className="gate-error">{error}</p>}
 

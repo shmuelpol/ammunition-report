@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import type { AmmoGroupDef, AmmoRow } from '../domain/types';
+import type { AmmoGroupDef, AmmoDataRow } from '../domain/types';
 
 interface AmmoFormProps {
   sectionId: string;
+  columnId: string;
 }
 
-export function AmmoForm({ sectionId }: AmmoFormProps) {
+export function AmmoForm({ sectionId, columnId }: AmmoFormProps) {
   const session = useAppStore((s) => s.session);
   const catalog = useAppStore((s) => s.catalog);
 
@@ -21,8 +22,9 @@ export function AmmoForm({ sectionId }: AmmoFormProps) {
         <AmmoGroupSection
           key={group.type}
           group={group}
-          rows={section.entries[group.type] || []}
           sectionId={sectionId}
+          columnId={columnId}
+          rows={section.rows.filter((r) => r.ammoType === group.type)}
         />
       ))}
     </div>
@@ -31,15 +33,21 @@ export function AmmoForm({ sectionId }: AmmoFormProps) {
 
 interface GroupSectionProps {
   group: AmmoGroupDef;
-  rows: AmmoRow[];
   sectionId: string;
+  columnId: string;
+  rows: AmmoDataRow[];
 }
 
-function AmmoGroupSection({ group, rows, sectionId }: GroupSectionProps) {
+function AmmoGroupSection({ group, sectionId, columnId, rows }: GroupSectionProps) {
   const [isOpen, setIsOpen] = useState(true);
-  const { addRow, removeRow, updateRowField } = useAppStore();
+  const { updateQuantity, addLotRow, removeLotRow } = useAppStore();
+  const [newLotModel, setNewLotModel] = useState('');
+  const [newLotName, setNewLotName] = useState('');
 
-  const totalQty = rows.reduce((sum, r) => sum + (r.quantity || 0), 0);
+  const totalQty = rows.reduce(
+    (sum, r) => sum + (r.quantities[columnId] || 0),
+    0,
+  );
 
   return (
     <div className={`ammo-group ${isOpen ? 'open' : ''}`}>
@@ -47,116 +55,156 @@ function AmmoGroupSection({ group, rows, sectionId }: GroupSectionProps) {
         <span className="group-icon">{isOpen ? '▼' : '◀'}</span>
         <span className="group-name">{group.displayName}</span>
         {totalQty > 0 && <span className="group-total">{totalQty}</span>}
-        {!group.quantityOnly && rows.length > 0 && (
-          <span className="group-count">{rows.length} פריטים</span>
-        )}
       </div>
 
       {isOpen && (
         <div className="ammo-group-body">
           {group.quantityOnly ? (
-            /* === Quantity-only group (primers) === */
+            /* Primer — single quantity */
             <div className="primer-input">
               <label>כמות:</label>
               <input
                 type="number"
                 min="0"
                 inputMode="numeric"
-                value={rows[0]?.quantity ?? 0}
+                value={rows[0]?.quantities[columnId] ?? 0}
                 onChange={(e) => {
-                  updateRowField(
-                    sectionId,
-                    group.type,
-                    0,
-                    'quantity',
-                    parseInt(e.target.value) || 0,
-                  );
+                  if (rows[0]) {
+                    updateQuantity(
+                      sectionId,
+                      rows[0].id,
+                      columnId,
+                      parseInt(e.target.value) || 0,
+                    );
+                  }
                 }}
               />
             </div>
-          ) : (
-            /* === Model-based groups === */
-            <>
-              {rows.length > 0 && (
-                <div className="ammo-table">
-                  <div className="ammo-table-header">
-                    <span className="col-model">דגם</span>
-                    {group.requiresSerial && <span className="col-serial">סדרה</span>}
-                    <span className="col-qty">כמות</span>
-                    <span className="col-action"></span>
-                  </div>
-
-                  {rows.map((row, index) => (
-                    <div key={row.id} className="ammo-table-row">
-                      <select
-                        className="col-model"
-                        value={row.modelId}
-                        onChange={(e) => {
-                          const model = group.models.find((m) => m.id === e.target.value);
-                          updateRowField(sectionId, group.type, index, 'modelId', e.target.value);
-                          updateRowField(
-                            sectionId,
-                            group.type,
-                            index,
-                            'modelName',
-                            model?.name || '',
-                          );
-                        }}
-                      >
-                        <option value="">בחר דגם...</option>
-                        {group.models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
-
-                      {group.requiresSerial && (
-                        <input
+          ) : group.hasLots ? (
+            /* Charge group — models with lot sub-rows */
+            <div className="ammo-table">
+              {group.models.map((model) => {
+                const modelRows = rows.filter((r) => r.modelId === model.id);
+                return (
+                  <div key={model.id} style={{ marginBottom: 12 }}>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: '0.9em',
+                        marginBottom: 4,
+                        color: 'var(--primary-dark)',
+                      }}
+                    >
+                      {model.name}
+                    </div>
+                    {modelRows.map((row) => (
+                      <div key={row.id} className="ammo-table-row">
+                        <span
                           className="col-serial"
-                          type="text"
-                          placeholder="סדרה"
-                          value={row.serial || ''}
+                          style={{
+                            fontSize: '0.85em',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          לוט {row.lot}
+                        </span>
+                        <input
+                          className="col-qty"
+                          type="number"
+                          min="0"
+                          inputMode="numeric"
+                          value={row.quantities[columnId] || ''}
                           onChange={(e) =>
-                            updateRowField(sectionId, group.type, index, 'serial', e.target.value)
+                            updateQuantity(
+                              sectionId,
+                              row.id,
+                              columnId,
+                              parseInt(e.target.value) || 0,
+                            )
                           }
                         />
-                      )}
-
+                        <button
+                          className="col-action remove-row-btn"
+                          onClick={() => removeLotRow(sectionId, row.id)}
+                          title="הסר לוט"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
                       <input
-                        className="col-qty"
-                        type="number"
-                        min="0"
-                        inputMode="numeric"
-                        placeholder="0"
-                        value={row.quantity || ''}
-                        onChange={(e) =>
-                          updateRowField(
-                            sectionId,
-                            group.type,
-                            index,
-                            'quantity',
-                            parseInt(e.target.value) || 0,
-                          )
-                        }
+                        type="text"
+                        placeholder="מספר לוט"
+                        value={newLotModel === model.id ? newLotName : ''}
+                        onFocus={() => setNewLotModel(model.id)}
+                        onChange={(e) => {
+                          setNewLotModel(model.id);
+                          setNewLotName(e.target.value);
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '6px 8px',
+                          border: '1px dashed var(--border)',
+                          borderRadius: 4,
+                          fontSize: '0.85em',
+                        }}
                       />
-
                       <button
-                        className="col-action remove-row-btn"
-                        onClick={() => removeRow(sectionId, group.type, index)}
-                        title="הסר שורה"
+                        className="add-row-btn"
+                        style={{
+                          width: 'auto',
+                          padding: '6px 12px',
+                          margin: 0,
+                        }}
+                        onClick={() => {
+                          if (
+                            newLotModel === model.id &&
+                            newLotName.trim()
+                          ) {
+                            addLotRow(
+                              sectionId,
+                              model.id,
+                              model.name,
+                              newLotName.trim(),
+                            );
+                            setNewLotName('');
+                          }
+                        }}
                       >
-                        ✕
+                        + לוט
                       </button>
                     </div>
-                  ))}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Standard group — pre-populated models with quantity */
+            <div className="ammo-table">
+              {rows.map((row) => (
+                <div key={row.id} className="ammo-table-row">
+                  <span className="col-model" style={{ fontWeight: 500 }}>
+                    {row.modelName}
+                  </span>
+                  <input
+                    className="col-qty"
+                    type="number"
+                    min="0"
+                    inputMode="numeric"
+                    value={row.quantities[columnId] || ''}
+                    onChange={(e) =>
+                      updateQuantity(
+                        sectionId,
+                        row.id,
+                        columnId,
+                        parseInt(e.target.value) || 0,
+                      )
+                    }
+                  />
                 </div>
-              )}
-
-              <button className="add-row-btn" onClick={() => addRow(sectionId, group.type)}>
-                + הוסף דגם {group.displayName}
-              </button>
-            </>
+              ))}
+            </div>
           )}
         </div>
       )}

@@ -1,6 +1,6 @@
 /**
- * Google Drive integration — GIS auth + full file operations.
- * Works with a specific shared folder named "ammunition-report".
+ * Google Drive integration — GIS auth + Picker API + drive.file scope only.
+ * Binary file upload/download for Excel workbooks.
  */
 
 declare global {
@@ -11,21 +11,16 @@ declare global {
 }
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
-const SHARED_FOLDER_NAME = 'ammunition-report';
-const TEMPLATE_FILE_NAME = 'ammunition-types.csv';
-const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || '';
+const APP_ID = import.meta.env.VITE_GOOGLE_APP_ID || '';
+const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const FOLDER_KEY = 'ammo-drive-folder-id';
 
 // ===== Types =====
 
 export interface GoogleAuthStatus {
   isSignedIn: boolean;
   user: { email: string; name: string } | null;
-}
-
-export interface SaveResult {
-  success: boolean;
-  fileId?: string;
-  error?: string;
 }
 
 export interface DriveFile {
@@ -40,9 +35,9 @@ export interface DriveFile {
 let tokenClient: any = null;
 let accessToken: string | null = null;
 let gisLoaded = false;
-
+let pickerLoaded = false;
 let onSignInCallback: ((status: GoogleAuthStatus) => void) | null = null;
-let sharedFolderId: string | null = null;
+let currentUserEmail = '';
 
 export function setOnSignInCallback(cb: ((status: GoogleAuthStatus) => void) | null) {
   onSignInCallback = cb;
@@ -56,11 +51,32 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
-// ===== Init =====
+export function getUserEmail(): string {
+  return currentUserEmail;
+}
+
+// ===== Folder ID in localStorage =====
+
+export function getSavedFolderId(): string | null {
+  return localStorage.getItem(FOLDER_KEY);
+}
+
+export function saveFolderId(id: string): void {
+  localStorage.setItem(FOLDER_KEY, id);
+}
+
+export function clearFolderId(): void {
+  localStorage.removeItem(FOLDER_KEY);
+}
+
+// ===== Script loading =====
 
 function loadGisClient(): Promise<void> {
   return new Promise((resolve) => {
-    if (gisLoaded) { resolve(); return; }
+    if (gisLoaded) {
+      resolve();
+      return;
+    }
     const script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
     script.onload = () => {
@@ -78,16 +94,16 @@ function loadGisClient(): Promise<void> {
               headers: { Authorization: `Bearer ${accessToken}` },
             });
             const info = await res.json();
-            if (onSignInCallback) {
-              onSignInCallback({
-                isSignedIn: true,
-                user: { email: info.email, name: info.name || info.email },
-              });
-            }
+            currentUserEmail = info.email || 'unknown';
+            onSignInCallback?.({
+              isSignedIn: true,
+              user: { email: info.email, name: info.name || info.email },
+            });
           } catch {
-            if (onSignInCallback) {
-              onSignInCallback({ isSignedIn: true, user: { email: 'unknown', name: 'unknown' } });
-            }
+            onSignInCallback?.({
+              isSignedIn: true,
+              user: { email: 'unknown', name: 'unknown' },
+            });
           }
         },
       });
@@ -98,26 +114,106 @@ function loadGisClient(): Promise<void> {
   });
 }
 
+function loadPickerApi(): Promise<void> {
+  return new Promise((resolve) => {
+    if (pickerLoaded) {
+      resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = () => {
+      window.gapi.load('picker', () => {
+        pickerLoaded = true;
+        resolve();
+      });
+    };
+    document.head.appendChild(script);
+  });
+}
+
+// ===== Init / Auth =====
+
 export async function initGoogleDrive(): Promise<void> {
   if (!CLIENT_ID) return;
   await loadGisClient();
+  if (API_KEY) {
+    await loadPickerApi();
+  }
 }
 
 export function signInGoogleDrive(): void {
   if (!tokenClient) return;
-  if (accessToken) {
-    tokenClient.requestAccessToken({ prompt: '' });
-  } else {
-    tokenClient.requestAccessToken({ prompt: 'consent' });
-  }
+  tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
 }
 
 export function signOutGoogleDrive(): void {
   if (accessToken) {
     window.google.accounts.oauth2.revoke(accessToken);
     accessToken = null;
-    sharedFolderId = null;
+    currentUserEmail = '';
   }
+}
+
+export function isPickerAvailable(): boolean {
+  return pickerLoaded && !!API_KEY;
+}
+
+// ===== Google Picker =====
+
+export function openFolderPicker(): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (!pickerLoaded || !accessToken) {
+      resolve(null);
+      return;
+    }
+    const view = new window.google.picker.DocsView(window.google.picker.ViewId.FOLDERS)
+      .setSelectFolderEnabled(true)
+      .setMimeTypes('application/vnd.google-apps.folder');
+
+    new window.google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(accessToken)
+      .setDeveloperKey(API_KEY)
+      .setAppId(APP_ID)
+      .setTitle('בחר תיקייה')
+      .setCallback((data: any) => {
+        if (data.action === window.google.picker.Action.PICKED) {
+          resolve(data.docs[0].id);
+        } else if (data.action === window.google.picker.Action.CANCEL) {
+          resolve(null);
+        }
+      })
+      .build()
+      .setVisible(true);
+  });
+}
+
+export function openFilePicker(mimeTypes?: string): Promise<{ id: string; name: string } | null> {
+  return new Promise((resolve) => {
+    if (!pickerLoaded || !accessToken) {
+      resolve(null);
+      return;
+    }
+    const view = new window.google.picker.DocsView().setIncludeFolders(false);
+    if (mimeTypes) view.setMimeTypes(mimeTypes);
+
+    new window.google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(accessToken)
+      .setDeveloperKey(API_KEY)
+      .setAppId(APP_ID)
+      .setTitle('בחר קובץ')
+      .setCallback((data: any) => {
+        if (data.action === window.google.picker.Action.PICKED) {
+          resolve({ id: data.docs[0].id, name: data.docs[0].name });
+        } else if (data.action === window.google.picker.Action.CANCEL) {
+          resolve(null);
+        }
+      })
+      .build()
+      .setVisible(true);
+  });
 }
 
 // ===== Core Drive helpers =====
@@ -133,222 +229,205 @@ async function driveGet(url: string): Promise<any> {
   return res.json();
 }
 
-async function driveGetText(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+// ===== Folder operations =====
+
+export async function createFolder(name: string, parentId?: string): Promise<string> {
+  const metadata: Record<string, any> = {
+    name,
+    mimeType: 'application/vnd.google-apps.folder',
+  };
+  if (parentId) metadata.parents = [parentId];
+
+  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(metadata),
   });
-  if (!res.ok) throw new Error(`Drive API ${res.status}`);
-  return res.text();
+  if (!res.ok) throw new Error(`Create folder failed: ${res.status}`);
+  const data = await res.json();
+  return data.id;
 }
 
-// ===== Shared Folder =====
-
-/**
- * Find the shared "ammunition-report" folder.
- * Searches both owned and shared-with-me folders.
- */
-export async function findSharedFolder(): Promise<string | null> {
-  if (sharedFolderId) return sharedFolderId;
-
+export async function ensureSubfolder(parentId: string, name: string): Promise<string> {
   const q = encodeURIComponent(
-    `name='${SHARED_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    `name='${name}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
   );
   const data = await driveGet(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=5&includeItemsFromAllDrives=true&supportsAllDrives=true`,
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&pageSize=1`,
   );
-
   if (data.files && data.files.length > 0) {
-    sharedFolderId = data.files[0].id;
-    return sharedFolderId;
+    return data.files[0].id;
   }
-  return null;
+  return createFolder(name, parentId);
 }
 
-// ===== Template =====
-
-/**
- * Load the ammunition-types.csv template from the shared folder.
- * Returns the raw CSV text, or null if not found.
- */
-export async function loadTemplateFromDrive(): Promise<string | null> {
-  const folderId = await findSharedFolder();
-  if (!folderId) return null;
-
-  const q = encodeURIComponent(
-    `name='${TEMPLATE_FILE_NAME}' and '${folderId}' in parents and trashed=false`,
-  );
-  const data = await driveGet(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=1`,
-  );
-
-  if (!data.files || data.files.length === 0) return null;
-
-  const fileId = data.files[0].id;
-  return driveGetText(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+export async function validateFolder(folderId: string): Promise<boolean> {
+  try {
+    await driveGet(
+      `https://www.googleapis.com/drive/v3/files/${folderId}?fields=id,name,mimeType`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-// ===== Unit file operations =====
+// ===== File operations =====
 
-/**
- * List all unit config files in the shared folder.
- */
-export async function listUnitsFromDrive(): Promise<DriveFile[]> {
-  const folderId = await findSharedFolder();
-  if (!folderId) return [];
-
+export async function listSubfolders(parentId: string): Promise<DriveFile[]> {
   const q = encodeURIComponent(
-    `'${folderId}' in parents and name contains '-config.json' and trashed=false`,
+    `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
   );
   const data = await driveGet(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)&pageSize=100&orderBy=modifiedTime desc`,
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=100&orderBy=name`,
   );
   return data.files || [];
 }
 
-/**
- * Read a JSON file from Drive by ID.
- */
-export async function readJsonFile(fileId: string): Promise<any> {
-  const text = await driveGetText(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
-  return JSON.parse(text);
-}
-
-/**
- * Read a file by name from the shared folder.
- */
-export async function readFileByName(fileName: string): Promise<any | null> {
-  const folderId = await findSharedFolder();
-  if (!folderId) return null;
-
+export async function findFile(parentId: string, fileName: string): Promise<DriveFile | null> {
   const q = encodeURIComponent(
-    `name='${fileName}' and '${folderId}' in parents and trashed=false`,
+    `name='${fileName}' and '${parentId}' in parents and trashed=false`,
   );
   const data = await driveGet(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id)&pageSize=1`,
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=1`,
   );
-  if (!data.files || data.files.length === 0) return null;
-
-  const text = await driveGetText(
-    `https://www.googleapis.com/drive/v3/files/${data.files[0].id}?alt=media`,
-  );
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
+  if (data.files && data.files.length > 0) return data.files[0];
+  return null;
 }
 
-/**
- * Create or update a file in the shared folder.
- * If a file with the same name exists, it is overwritten.
- */
-export async function writeFileToDrive(
+export async function readFileAsBuffer(fileId: string): Promise<ArrayBuffer> {
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) throw new Error(`Drive API ${res.status}`);
+  return res.arrayBuffer();
+}
+
+export async function writeBinaryFile(
   fileName: string,
-  content: string,
-  mimeType: string = 'application/json',
-): Promise<SaveResult> {
-  if (!accessToken) return { success: false, error: 'Not signed in' };
+  data: ArrayBuffer,
+  mimeType: string,
+  parentId: string,
+  existingFileId?: string,
+): Promise<string> {
+  if (!accessToken) throw new Error('Not signed in');
 
-  const folderId = await findSharedFolder();
-  if (!folderId) return { success: false, error: 'Shared folder not found' };
-
-  try {
-    // Check if file already exists
-    const q = encodeURIComponent(
-      `name='${fileName}' and '${folderId}' in parents and trashed=false`,
-    );
-    const existing = await driveGet(
-      `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id)&pageSize=1`,
-    );
-
-    if (existing.files && existing.files.length > 0) {
-      // Update existing file
-      const fileId = existing.files[0].id;
-      const res = await fetch(
-        `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id`,
-        {
-          method: 'PATCH',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': mimeType,
-          },
-          body: content,
+  if (existingFileId) {
+    const res = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=media&fields=id`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': mimeType,
         },
-      );
-      if (!res.ok) throw new Error(`Update failed: ${res.status}`);
-      const result = await res.json();
-      return { success: true, fileId: result.id };
-    } else {
-      // Create new file
-      const boundary = '-------upload_boundary';
-      const metadata = { name: fileName, parents: [folderId], mimeType };
-      const body =
-        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-        `${JSON.stringify(metadata)}\r\n` +
-        `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n` +
-        `${content}\r\n--${boundary}--`;
-
-      const res = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': `multipart/related; boundary=${boundary}`,
-          },
-          body,
-        },
-      );
-      if (!res.ok) throw new Error(`Create failed: ${res.status}`);
-      const result = await res.json();
-      return { success: true, fileId: result.id };
-    }
-  } catch (err: any) {
-    console.error('Drive write error:', err);
-    return { success: false, error: err.message || 'Failed to write' };
+        body: data,
+      },
+    );
+    if (!res.ok) throw new Error(`Update failed: ${res.status}`);
+    return (await res.json()).id;
   }
+
+  // Multipart upload for new file
+  const metadata = JSON.stringify({ name: fileName, parents: [parentId] });
+  const boundary = '-------ammo_upload_boundary';
+
+  const encoder = new TextEncoder();
+  const metaPart = encoder.encode(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
+  );
+  const binHeader = encoder.encode(
+    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+  );
+  const ending = encoder.encode(`\r\n--${boundary}--`);
+
+  const body = new Uint8Array(metaPart.length + binHeader.length + data.byteLength + ending.length);
+  body.set(metaPart, 0);
+  body.set(binHeader, metaPart.length);
+  body.set(new Uint8Array(data), metaPart.length + binHeader.length);
+  body.set(ending, metaPart.length + binHeader.length + data.byteLength);
+
+  const res = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  );
+  if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+  return (await res.json()).id;
 }
 
-// ===== High-level unit operations =====
+// ===== Backup management =====
 
-/**
- * Save unit config JSON to Drive.
- */
-export async function saveUnitConfig(unitName: string, config: any): Promise<SaveResult> {
-  const safeName = unitName.replace(/[\\/:*?"<>|]/g, '_');
-  return writeFileToDrive(`${safeName}-config.json`, JSON.stringify(config, null, 2));
+export async function copyFile(
+  fileId: string,
+  newName: string,
+  parentId: string,
+): Promise<string> {
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/copy`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: newName, parents: [parentId] }),
+    },
+  );
+  if (!res.ok) throw new Error(`Copy failed: ${res.status}`);
+  return (await res.json()).id;
 }
 
-/**
- * Save unit data JSON (app state) to Drive.
- */
-export async function saveUnitData(unitName: string, data: any): Promise<SaveResult> {
-  const safeName = unitName.replace(/[\\/:*?"<>|]/g, '_');
-  return writeFileToDrive(`${safeName}-data.json`, JSON.stringify(data, null, 2));
+export async function deleteFile(fileId: string): Promise<void> {
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  );
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
-/**
- * Save human-readable CSV report to Drive.
- */
-export async function saveUnitCSV(unitName: string, csvContent: string): Promise<SaveResult> {
-  const safeName = unitName.replace(/[\\/:*?"<>|]/g, '_');
-  // Add BOM for Excel Hebrew support
-  const bom = '\uFEFF';
-  return writeFileToDrive(`${safeName}-report.csv`, bom + csvContent, 'text/csv');
+export async function createBackup(
+  parentId: string,
+  dataFileId: string,
+  unitName: string,
+): Promise<void> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
+  const backupName = `${unitName}-data.xlsx.backup-${timestamp}`;
+  await copyFile(dataFileId, backupName, parentId);
 }
 
-/**
- * Load unit config from Drive.
- */
-export async function loadUnitConfig(unitName: string): Promise<any | null> {
-  const safeName = unitName.replace(/[\\/:*?"<>|]/g, '_');
-  return readFileByName(`${safeName}-config.json`);
-}
-
-/**
- * Load unit data from Drive.
- */
-export async function loadUnitData(unitName: string): Promise<any | null> {
-  const safeName = unitName.replace(/[\\/:*?"<>|]/g, '_');
-  return readFileByName(`${safeName}-data.json`);
+export async function cleanOldBackups(
+  parentId: string,
+  unitName: string,
+  keepCount = 10,
+): Promise<void> {
+  const q = encodeURIComponent(
+    `name contains '${unitName}-data.xlsx.backup-' and '${parentId}' in parents and trashed=false`,
+  );
+  const data = await driveGet(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&pageSize=100&orderBy=createdTime desc`,
+  );
+  const files = data.files || [];
+  if (files.length > keepCount) {
+    for (const f of files.slice(keepCount)) {
+      try {
+        await deleteFile(f.id);
+      } catch {
+        /* ignore cleanup errors */
+      }
+    }
+  }
 }

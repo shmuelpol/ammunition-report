@@ -1,8 +1,7 @@
 // ===== Unit hierarchy =====
-export type UnitLevel = 'team' | 'platoon' | 'battery';
-export type SectionType = 'belly' | 'outside' | 'alpha' | 'ramsaw';
+export type UnitLevel = 'battery' | 'battalion';
 
-// ===== Catalog definitions (loaded dynamically from Drive template) =====
+// ===== Catalog definitions =====
 export interface AmmoModelDef {
   id: string;
   name: string;
@@ -12,37 +11,57 @@ export interface AmmoGroupDef {
   type: string;
   displayName: string;
   models: AmmoModelDef[];
-  requiresSerial: boolean;
   quantityOnly: boolean;
+  hasLots: boolean;
 }
 
-// ===== Data entries =====
-export interface AmmoRow {
+// ===== Sub-unit definition =====
+export interface SubUnitDef {
+  displayName: string;
+  codeName: string;
+  gunIds: string[];
+  storageLocations: string[];
+}
+
+// ===== Excel metadata =====
+export interface ExcelMetadata {
+  appVersion: string;
+  formatVersion: number;
+  unitNumber: string;
+  unitName: string;
+  unitLevel: UnitLevel;
+  subUnits: string[];
+  createdAt: string;
+  lastModifiedAt: string;
+  lastModifiedBy: string;
+  dataRevision: number;
+}
+
+// ===== Data row (per ammo item across all locations) =====
+export interface AmmoDataRow {
   id: string;
+  ammoType: string;
   modelId: string;
   modelName: string;
-  quantity: number;
-  serial?: string;
+  lot: string;
+  quantities: Record<string, number>;
 }
 
-export interface SectionEntries {
-  [groupType: string]: AmmoRow[];
-}
-
+// ===== Section (one per sub-unit) =====
 export interface Section {
   id: string;
-  type: SectionType;
   label: string;
-  parentGroup?: string;
-  entries: SectionEntries;
+  gunIds: string[];
+  storageLocations: string[];
+  rows: AmmoDataRow[];
 }
 
-// ===== Unit config (stored as JSON in Drive) =====
+// ===== Unit config =====
 export interface UnitConfig {
   unitName: string;
   unitLevel: UnitLevel;
   battalionNumber: string;
-  teamNames: string[];
+  subUnits: SubUnitDef[];
   createdAt: string;
   createdBy: string;
 }
@@ -59,29 +78,14 @@ export interface ReportSession {
   unitLevel: UnitLevel;
   unitName: string;
   sections: Section[];
+  dataRevision: number;
   createdAt: string;
   updatedAt: string;
-}
-
-// ===== Draft info for listing =====
-export interface DraftInfo {
-  id: string;
-  unitName: string;
-  unitLevel: UnitLevel;
-  reporterName: string;
-  updatedAt: string;
+  migratedFromOldFormat?: boolean;
 }
 
 // ===== Display labels =====
 export const UNIT_LEVEL_LABELS: Record<UnitLevel, string> = {
-  team: 'צוות',
-  platoon: 'פלגה',
   battery: 'סוללה',
-};
-
-export const SECTION_TYPE_LABELS: Record<SectionType, string> = {
-  belly: 'בטן',
-  outside: 'חוץ',
-  alpha: 'אלפ"א',
-  ramsaw: 'רמסע',
+  battalion: 'גדוד',
 };

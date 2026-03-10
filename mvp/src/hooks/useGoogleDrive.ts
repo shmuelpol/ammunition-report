@@ -5,54 +5,66 @@ import {
   signOutGoogleDrive,
   isGoogleDriveConfigured,
   setOnSignInCallback,
-  findSharedFolder,
-  loadTemplateFromDrive,
-  listUnitsFromDrive,
-  loadUnitConfig,
-  loadUnitData,
-  saveUnitConfig,
-  saveUnitData,
-  saveUnitCSV,
+  getSavedFolderId,
+  saveFolderId,
+  clearFolderId,
+  validateFolder,
+  createFolder,
+  ensureSubfolder,
+  listSubfolders,
+  findFile,
+  readFileAsBuffer,
+  writeBinaryFile,
+  createBackup,
+  cleanOldBackups,
+  openFolderPicker,
+  openFilePicker,
+  isPickerAvailable as checkPickerAvailable,
 } from '../integrations/googleDrive';
 import type { GoogleAuthStatus, DriveFile } from '../integrations/googleDrive';
-import { parseCatalogCSV } from '../domain/catalog';
-import type { AmmoGroupDef, UnitConfig } from '../domain/types';
 
-export interface DriveState {
-  // Auth
+export interface DriveHookState {
   isConfigured: boolean;
   isSignedIn: boolean;
   user: GoogleAuthStatus['user'];
   isLoading: boolean;
+  folderId: string | null;
+  isPickerAvailable: boolean;
+
   signIn: () => void;
   signOut: () => void;
-  // Shared folder
-  folderFound: boolean | null; // null = not checked yet
-  checkFolder: () => Promise<boolean>;
-  // Template
-  catalog: AmmoGroupDef[] | null;
-  templateError: string | null;
-  loadTemplate: () => Promise<AmmoGroupDef[] | null>;
-  // Units
+
+  createRootFolder: (name: string) => Promise<string>;
+  pickFolder: () => Promise<string | null>;
+  setFolderById: (id: string) => Promise<boolean>;
+
   listUnits: () => Promise<DriveFile[]>;
-  loadConfig: (unitName: string) => Promise<UnitConfig | null>;
-  loadData: (unitName: string) => Promise<any | null>;
-  saveConfig: (unitName: string, config: UnitConfig) => Promise<boolean>;
-  saveData: (unitName: string, data: any) => Promise<boolean>;
-  saveCsv: (unitName: string, csv: string) => Promise<boolean>;
+  readUnitExcel: (unitFolderId: string, unitName: string) => Promise<ArrayBuffer | null>;
+  saveUnitExcel: (
+    unitName: string,
+    data: ArrayBuffer,
+    revision: number,
+  ) => Promise<{ success: boolean; error?: string }>;
+
+  pickFile: (mimeTypes?: string) => Promise<{ id: string; name: string } | null>;
+  readFileById: (fileId: string) => Promise<ArrayBuffer>;
 }
 
-export function useGoogleDrive(): DriveState {
-  const [authStatus, setAuthStatus] = useState<GoogleAuthStatus>({ isSignedIn: false, user: null });
+export function useGoogleDrive(): DriveHookState {
+  const [authStatus, setAuthStatus] = useState<GoogleAuthStatus>({
+    isSignedIn: false,
+    user: null,
+  });
   const [isLoading, setIsLoading] = useState(true);
-  const [folderFound, setFolderFound] = useState<boolean | null>(null);
-  const [catalog, setCatalog] = useState<AmmoGroupDef[] | null>(null);
-  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [folderId, setFolderId] = useState<string | null>(getSavedFolderId());
 
   const isConfigured = isGoogleDriveConfigured();
 
   useEffect(() => {
-    if (!isConfigured) { setIsLoading(false); return; }
+    if (!isConfigured) {
+      setIsLoading(false);
+      return;
+    }
     setOnSignInCallback((status) => {
       setAuthStatus(status);
       setIsLoading(false);
@@ -62,77 +74,111 @@ export function useGoogleDrive(): DriveState {
   }, [isConfigured]);
 
   const signIn = useCallback(() => signInGoogleDrive(), []);
+
   const signOut = useCallback(() => {
     signOutGoogleDrive();
     setAuthStatus({ isSignedIn: false, user: null });
-    setFolderFound(null);
-    setCatalog(null);
+    setFolderId(null);
+    clearFolderId();
   }, []);
 
-  const checkFolder = useCallback(async () => {
-    const id = await findSharedFolder();
-    const found = id !== null;
-    setFolderFound(found);
-    return found;
+  const createRootFolder = useCallback(async (name: string) => {
+    const id = await createFolder(name);
+    saveFolderId(id);
+    setFolderId(id);
+    return id;
   }, []);
 
-  const loadTemplate = useCallback(async () => {
-    setTemplateError(null);
-    try {
-      const csv = await loadTemplateFromDrive();
-      if (!csv) {
-        setTemplateError(`הקובץ ammunition-types.csv לא נמצא בתיקייה ammunition-report`);
-        return null;
-      }
-      const parsed = parseCatalogCSV(csv);
-      if (parsed.length === 0) {
-        setTemplateError('קובץ התבנית ריק או בפורמט שגוי');
-        return null;
-      }
-      setCatalog(parsed);
-      return parsed;
-    } catch (err: any) {
-      setTemplateError(err.message || 'שגיאה בטעינת תבנית');
-      return null;
+  const pickFolder = useCallback(async () => {
+    const id = await openFolderPicker();
+    if (id) {
+      saveFolderId(id);
+      setFolderId(id);
     }
+    return id;
   }, []);
 
-  const listUnitsCallback = useCallback(() => listUnitsFromDrive(), []);
-  const loadConfigCb = useCallback((name: string) => loadUnitConfig(name), []);
-  const loadDataCb = useCallback((name: string) => loadUnitData(name), []);
-  
-  const saveConfigCb = useCallback(async (name: string, config: UnitConfig) => {
-    const r = await saveUnitConfig(name, config);
-    return r.success;
+  const setFolderById = useCallback(async (id: string) => {
+    const valid = await validateFolder(id);
+    if (valid) {
+      saveFolderId(id);
+      setFolderId(id);
+    }
+    return valid;
   }, []);
 
-  const saveDataCb = useCallback(async (name: string, data: any) => {
-    const r = await saveUnitData(name, data);
-    return r.success;
-  }, []);
+  const listUnits = useCallback(async () => {
+    if (!folderId) return [];
+    return listSubfolders(folderId);
+  }, [folderId]);
 
-  const saveCsvCb = useCallback(async (name: string, csv: string) => {
-    const r = await saveUnitCSV(name, csv);
-    return r.success;
-  }, []);
+  const readUnitExcel = useCallback(
+    async (unitFolderId: string, unitName: string) => {
+      const fileName = `${unitName}-data.xlsx`;
+      const file = await findFile(unitFolderId, fileName);
+      if (!file) return null;
+      return readFileAsBuffer(file.id);
+    },
+    [],
+  );
+
+  const saveUnitExcel = useCallback(
+    async (unitName: string, data: ArrayBuffer, _revision: number) => {
+      if (!folderId) return { success: false, error: 'No folder configured' };
+
+      try {
+        const subFolderId = await ensureSubfolder(folderId, unitName);
+        const fileName = `${unitName}-data.xlsx`;
+        const existing = await findFile(subFolderId, fileName);
+
+        // Backup before overwrite
+        if (existing) {
+          await createBackup(subFolderId, existing.id, unitName);
+          await cleanOldBackups(subFolderId, unitName);
+        }
+
+        await writeBinaryFile(
+          fileName,
+          data,
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          subFolderId,
+          existing?.id,
+        );
+
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    },
+    [folderId],
+  );
+
+  const pickFileCb = useCallback(
+    async (mimeTypes?: string) => openFilePicker(mimeTypes),
+    [],
+  );
+
+  const readFileByIdCb = useCallback(
+    async (fileId: string) => readFileAsBuffer(fileId),
+    [],
+  );
 
   return {
     isConfigured,
     isSignedIn: authStatus.isSignedIn,
     user: authStatus.user,
     isLoading,
+    folderId,
+    isPickerAvailable: checkPickerAvailable(),
     signIn,
     signOut,
-    folderFound,
-    checkFolder,
-    catalog,
-    templateError,
-    loadTemplate,
-    listUnits: listUnitsCallback,
-    loadConfig: loadConfigCb,
-    loadData: loadDataCb,
-    saveConfig: saveConfigCb,
-    saveData: saveDataCb,
-    saveCsv: saveCsvCb,
+    createRootFolder,
+    pickFolder,
+    setFolderById,
+    listUnits,
+    readUnitExcel,
+    saveUnitExcel,
+    pickFile: pickFileCb,
+    readFileById: readFileByIdCb,
   };
 }
